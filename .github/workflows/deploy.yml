@@ -1,0 +1,57 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+
+jobs:
+  # --- TEST ---
+    test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+
+        - uses: actions/setup-python@5
+          with:
+            python-version: "3.11"
+            cache: "pip"
+
+        - name: Install package dependencies
+          run: |
+            cd pillly-api
+            pip install -r requirements.txt
+
+        - name: Run tests
+          run: |
+            cd pillly-api
+            pytest tests/ -v --tb=short
+          env:
+            # Actual values are injected by GitHub Secrets — never hardcoding to code
+            APP_ENV: test
+            SECRET_KEY: ${{ secrets.SECRET_KEY }}
+            SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+            SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+            SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+            UPSTASH_REDIS_URL: ${{ secrets.UPSTASH_REDIS_URL }}
+            UPSTASH_REDIS_TOKEN: ${{ secrets.UPSTASH_REDIS_TOKEN }}
+            QSTASH_TOKEN: ${{ secrets.QSTASH_TOKEN }}
+            QSTASH_CURRENT_SIGNING_KEY: ${{ secrets.QSTASH_CURRENT_SIGNING_KEY }}
+            QSTASH_NEXT_SIGNING_KEY: ${{ secrets.QSTASH_NEXT_SIGNING_KEY }}
+            FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+            APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
+            APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
+            APNS_BUNDLE_ID: ${{ secrets.APNS_BUNDLE_ID }}
+
+  # --- Distribution ---
+    deploy:
+      needs: test
+      runs-on: ubuntu-latest
+      if: github.ref == 'ref/heads/main'
+      steps:
+        - name: Trigger Render deployment
+          run: |
+            curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+            # RENDER_DEPLOY_HOOK_URL is a GitHub Secret
