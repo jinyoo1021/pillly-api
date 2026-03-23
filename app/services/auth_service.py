@@ -8,6 +8,32 @@ from app.schemas.auth import (
 
 class AuthService:
 
+    def _sync_user(self, user) -> None:
+        """Sync auth.users to public.users table"""
+        try:
+            existing = supabase.table("users") \
+                .select("id") \
+                .eq("id", user.id) \
+                .execute()
+
+            print(f"Existing user check: {existing.data}")
+
+            if not existing.data:
+                result = supabase.table("users").insert({
+                    "id": user.id,
+                    "email": user.email,
+                    "name": user.user_metadata.get("name", ""),
+                    "timezone": user.user_metadata.get("timezone", "Asia/Seoul"),
+                    "language": user.user_metadata.get("language", "ko"),
+                    "provider": user.app_metadata.get("provider", "email"),
+                }).execute()
+
+                print(f"User synced: {result.data}")
+
+        except Exception as e:
+            print(f"ERROR in _sync_user: {e}")
+            raise
+
     def register(self, req: RegisterRequest) -> dict:
         """Register new user with email and password"""
         try:
@@ -44,32 +70,33 @@ class AuthService:
     def login(self, req: LoginRequest) -> dict:
         """Login with email and password"""
         try:
-            reponse = supabase.auth.sign_in_with_password({
+            response = supabase.auth.sign_in_with_password({
                 "email": req.email,
                 "password": req.password,
             })
 
             return {
-                "access_token": reponse.session.access_token,
-                "refresh_token": reponse.session.refresh_token,
+                "access_token": response.session.access_token,
+                "refresh_token": response.session.refresh_token,
                 "user": {
-                    "id": reponse.user.id,
-                    "email": reponse.user.email,
-                    "name": reponse.user.user_metadata.get("name"),
-                    "language": reponse.user.user_metadata.get("language", "ko",),
+                    "id": response.user.id,
+                    "email": response.user.email,
+                    "name": response.user.user_metadata.get("name"),
+                    "language": response.user.user_metadata.get("language", "ko",),
                 },
             }
 
-        except Exception:
+        except Exception as e:
+            print(f"ERROR in login: {e}")
             raise HTTPException(
-                status_code = 400,
-                detail = "INVALID_CREDENTIALS",
+                status_code=401,
+                detail="INVALID_CREDENTIALS",
             )
 
     def social_login(self, req: SocialLoginRequest) -> dict:
         """Login with Google or Apple OAuth token"""
         try:
-            reponse = supabase.auth.sign_up_with_id_token({
+            response = supabase.auth.sign_up_with_id_token({
                 "provider": req.provider,
                 "id_token": req.id_token,
             })
@@ -78,28 +105,31 @@ class AuthService:
                 response.user.created_at == response.user.updated_at
             )
 
+            self._sync_user(response.user)
+
             return {
-                "access_token": reponse.session.access_token,
-                "refresh_token": reponse.session.refresh_token,
+                "access_token": response.session.access_token,
+                "refresh_token": response.session.refresh_token,
                 "is_new_user": is_new_user,
                 "user": {
-                    "id": reponse.user.id,
-                    "email": reponse.user.email,
-                    "name": reponse.user.user_metadata.get("name"),
-                    "language": reponse.user.user_metadata.get("language", "ko",),
+                    "id": response.user.id,
+                    "email": response.user.email,
+                    "name": response.user.user_metadata.get("name"),
+                    "language": response.user.user_metadata.get("language", "ko",),
                 },
             }
 
-        except Exception:
+        except Exception as e:
+            print(f"ERROR in social_login: {e}")
             raise HTTPException(
-                status_code = 400,
-                detail = "INVALID_TOKEN",
+                status_code=401,
+                detail="INVALID_TOKEN",
             )
 
     def refresh_token(self, refresh_token: str) -> dict:
         """Reissue access token using refresh token"""
         try:
-            response = supabase.auth.refresh_session(refresh_token)
+            response = supabase.auth.refresh_access_token(refresh_token)
 
             return {
                 "access_token": response.session.access_token,
@@ -111,7 +141,7 @@ class AuthService:
                 detail=str(e),
             )
 
-    def logout(self, refresh_token: str) -> None:
+    def logout(self, token: str) -> None:
         """Logout by revoking the refresh token"""
         try:
             supabase.auth.sign_out()
