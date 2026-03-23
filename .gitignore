@@ -50,14 +50,14 @@ supabase/.temp/
 
 ---
 
-## final dir 
-```
-pillly-api/
-├── .gitignore          
-├── .env              
-├── .env.example     
-├── .venv/
-│   └── .gitignore    
-├── secrets/
-│   └── .gitignore    
-└── app/
+## final dir
+#
+#pillly-api/
+#├── .gitignore
+#├── .env
+#├── .env.example
+#├── .venv/
+#│   └── .gitignore
+#├── secrets/
+#│   └── .gitignore
+#└── app/
