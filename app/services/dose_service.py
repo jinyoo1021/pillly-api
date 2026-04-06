@@ -6,11 +6,11 @@ from app.core.supabase import supabase
 class DoseService:
 
     def confirm(self, schedule_id: str, user_id: str) -> dict:
-        """Mark medication as taken"""
+        """Mark medication as taken (upsert: updates status if record already exists)"""
         try:
             today = date.today().isoformat()
 
-            # Check for duplicate log
+            # Check if a log already exists for today
             existing = supabase.table("dose_logs") \
                 .select("id") \
                 .eq("schedule_id", schedule_id) \
@@ -18,18 +18,23 @@ class DoseService:
                 .execute()
 
             if existing.data:
-                raise HTTPException(
-                    status_code=400,
-                    detail="ALREADY_LOGGED",
-                )
-
-            result = supabase.table("dose_logs").insert({
-                "schedule_id": schedule_id,
-                "user_id": user_id,
-                "log_date": today,
-                "status": "done",
-                "taken_at": datetime.now(timezone.utc).isoformat(),
-            }).execute()
+                # Record exists — update status to done
+                result = supabase.table("dose_logs") \
+                    .update({
+                    "status": "done",
+                    "taken_at": datetime.now(timezone.utc).isoformat(),
+                }) \
+                    .eq("id", existing.data[0]["id"]) \
+                    .execute()
+            else:
+                # No record yet — insert new log
+                result = supabase.table("dose_logs").insert({
+                    "schedule_id": schedule_id,
+                    "user_id": user_id,
+                    "log_date": today,
+                    "status": "done",
+                    "taken_at": datetime.now(timezone.utc).isoformat(),
+                }).execute()
 
             return {
                 "log_id": result.data[0]["id"],
@@ -44,11 +49,11 @@ class DoseService:
             raise HTTPException(status_code=500, detail=str(e))
 
     def skip(self, schedule_id: str, user_id: str) -> dict:
-        """Mark medication as skipped"""
+        """Mark medication as skipped (upsert: updates status if record already exists)"""
         try:
             today = date.today().isoformat()
 
-            # Check for duplicate log
+            # Check if a log already exists for today
             existing = supabase.table("dose_logs") \
                 .select("id") \
                 .eq("schedule_id", schedule_id) \
@@ -56,17 +61,22 @@ class DoseService:
                 .execute()
 
             if existing.data:
-                raise HTTPException(
-                    status_code=400,
-                    detail="ALREADY_LOGGED",
-                )
-
-            result = supabase.table("dose_logs").insert({
-                "schedule_id": schedule_id,
-                "user_id": user_id,
-                "log_date": today,
-                "status": "skipped",
-            }).execute()
+                # Record exists — update status to skipped and clear taken_at
+                result = supabase.table("dose_logs") \
+                    .update({
+                    "status": "skipped",
+                    "taken_at": None,
+                }) \
+                    .eq("id", existing.data[0]["id"]) \
+                    .execute()
+            else:
+                # No record yet — insert new log
+                result = supabase.table("dose_logs").insert({
+                    "schedule_id": schedule_id,
+                    "user_id": user_id,
+                    "log_date": today,
+                    "status": "skipped",
+                }).execute()
 
             return {
                 "log_id": result.data[0]["id"],
