@@ -94,17 +94,19 @@ class DoseService:
         try:
             # Fetch all schedules for user
             medications = supabase.table("medications") \
-                .select("id, schedules(id)") \
+                .select("id, schedules(id, is_active)") \
                 .eq("user_id", user_id) \
                 .is_("deleted_at", "null") \
                 .execute()
 
-            # Count total schedules per day
-            schedule_count = sum(
-                len(med["schedules"])
-                for med in medications.data
-            )
+            # Collect active schedule IDs and count
+            active_schedule_ids = []
+            for med in medications.data:
+                for s in med["schedules"]:
+                    if s.get("is_active", True):
+                        active_schedule_ids.append(s["id"])
 
+            schedule_count = len(active_schedule_ids)
             if schedule_count == 0:
                 return {"logs": []}
 
@@ -114,6 +116,7 @@ class DoseService:
                 .eq("user_id", user_id) \
                 .gte("log_date", from_date) \
                 .lte("log_date", to_date) \
+                .in_("schedule_id", active_schedule_ids) \
                 .execute()
 
             # Group by date
@@ -121,9 +124,11 @@ class DoseService:
             for log in logs.data:
                 d = log["log_date"]
                 if d not in date_map:
-                    date_map[d] = {"done": 0, "total": schedule_count}
+                    date_map[d] = {"done": 0, "skipped": 0, "total": schedule_count}
                 if log["status"] == "done":
                     date_map[d]["done"] += 1
+                elif log["status"] == "skipped":
+                    date_map[d]["skipped"] += 1
 
             # Build response
             result = []
@@ -143,6 +148,8 @@ class DoseService:
                     "date": d,
                     "total": total,
                     "done": done,
+                    "skipped": counts["skipped"],
+                    "missed": total - done - counts["skipped"],
                     "rate": rate,
                     "grade": grade,
                 })
@@ -151,6 +158,65 @@ class DoseService:
 
         except Exception as e:
             print(f"ERROR in get_logs: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    def get_day_logs(self, user_id: str, log_date: str) -> dict:
+        """Get individual medication logs for a specific date"""
+        try:
+            # Fetch active schedule IDs
+            medications = supabase.table("medications") \
+                .select("id, schedules(id, is_active)") \
+                .eq("user_id", user_id) \
+                .is_("deleted_at", "null") \
+                .execute()
+
+            active_schedule_ids = [
+                s["id"]
+                for med in medications.data
+                for s in med["schedules"]
+                if s.get("is_active", True)
+            ]
+
+            if not active_schedule_ids:
+                return {"date": log_date, "items": []}
+
+            # Fetch dose logs for active schedules only
+            logs = supabase.table("dose_logs") \
+                .select("id, schedule_id, status, taken_at, schedules(scheduled_time, medications(name, color_tag))") \
+                .eq("user_id", user_id) \
+                .eq("log_date", log_date) \
+                .in_("schedule_id", active_schedule_ids) \
+                .order("taken_at", desc=True) \
+                .execute()
+
+            # Deduplicate by schedule_id — keep latest entry only
+            seen = set()
+            items = []
+            for log in logs.data:
+                sid = log["schedule_id"]
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                schedule = log.get("schedules") or {}
+                medication = schedule.get("medications") or {}
+                items.append({
+                    "id": log["id"],
+                    "schedule_id": log["schedule_id"],
+                    "log_date": log_date,
+                    "medication_name": medication.get("name", "Unknown"),
+                    "color_tag": medication.get("color_tag", "#1D9E75"),
+                    "scheduled_time": (schedule.get("scheduled_time") or "")[:5],
+                    "status": log["status"],
+                    "taken_at": log["taken_at"],
+                })
+
+            # Sort by scheduled time
+            items.sort(key=lambda x: x["scheduled_time"])
+
+            return {"date": log_date, "items": items}
+
+        except Exception as e:
+            print(f"ERROR in get_day_logs: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     def get_stats(self, user_id: str, period: str) -> dict:

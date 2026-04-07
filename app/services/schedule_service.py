@@ -9,10 +9,11 @@ class ScheduleService:
         """Get today's medication schedule with dose status"""
         try:
             today = date.today().isoformat()
+            today_weekday = date.today().isoweekday()
 
             # Fetch all active medications for the user
             medications = supabase.table("medications") \
-                .select("id, name, color_tag, schedules(id, scheduled_time)") \
+                .select("id, name, color_tag, schedules(id, scheduled_time, cycle_type, cycle_value, is_active)") \
                 .eq("user_id", user_id) \
                 .eq("is_active", True) \
                 .is_("deleted_at", "null") \
@@ -31,6 +32,32 @@ class ScheduleService:
             all_schedules = []
             for med in medications.data:
                 for s in med.get("schedules", []):
+
+                    # Skip inactive schedules
+                    if not s.get("is_active", True):
+                        continue
+
+                    cycle_type = s.get("cycle_type", "daily")
+                    cycle_value = s.get("cycle_value")
+
+                    # Daily: always include
+                    if cycle_type == "daily":
+                        pass
+                    # Weekly: include only if today matches selected weekdays
+                    elif cycle_type == "weekly":
+                        weekdays = cycle_value.get("weekdays", []) if isinstance(cycle_value, dict) else []
+                        if today_weekday not in weekdays:
+                            continue
+                    # Interval: include only if today matches the interval
+                    elif cycle_type == "interval":
+                        interval = cycle_value.get("days", 1) if isinstance(cycle_value, dict) else 1
+                        ref_date_str = cycle_value.get("start_date") if isinstance(cycle_value, dict) else None
+                        if ref_date_str:
+                            from datetime import datetime
+                            ref_date = datetime.strptime(ref_date_str, "%Y-%m-%d").date()
+                            if (date.today() - ref_date).days % interval != 0:
+                                continue
+
                     all_schedules.append({
                         "schedule_id": s["id"],
                         "scheduled_time": s["scheduled_time"],

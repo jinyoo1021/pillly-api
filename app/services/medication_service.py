@@ -76,23 +76,55 @@ class MedicationService:
 
 
     def update(self, medication_id: str, user_id: str, req: MedicationUpdate) -> dict:
-        """Update medication info (except schedules)"""
+        """Update medication info and schedules"""
         self._verify_owner(medication_id, user_id)
 
-        payload = {k: v for k, v in req.model_dump().items() if v is not None}
+        # Update medications table, excluding schedules field
+        med_payload = {
+            k: v for k, v in req.model_dump(exclude={"schedules"}).items()
+            if v is not None
+        }
+        if med_payload:
+            supabase.table("medications") \
+                .update(med_payload) \
+                .eq("id", medication_id) \
+                .execute()
 
-        if not payload:
-            raise HTTPException(
-                status_code=400,
-                detail="NO_FIELDS_TO_UPDATE",
-            )
+        # Soft delete existing schedules and insert new ones
+        # Hard delete is not possible due to FK constraint from dose_logs
+        if req.schedules is not None:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat()
 
+            # Soft delete active schedules
+            supabase.table("schedules") \
+                .update({"is_active": False}) \
+                .eq("medication_id", medication_id) \
+                .eq("is_active", True) \
+                .execute()
+
+            # Insert new schedules
+            new_schedules = [
+                {
+                    "medication_id": medication_id,
+                    "scheduled_time": s.scheduled_time,
+                    "cycle_type": s.cycle_type,
+                    "cycle_value": s.cycle_value,
+                }
+                for s in req.schedules
+            ]
+            supabase.table("schedules").insert(new_schedules).execute()
+
+        # Return updated medication with schedules
         result = supabase.table("medications") \
-            .update(payload) \
+            .select("*, schedules!inner(*)") \
             .eq("id", medication_id) \
+            .single() \
             .execute()
 
-        return result.data[0]
+        data = result.data
+        data["schedules"] = [s for s in data.get("schedules", []) if s.get("is_active", True)]
+        return data
 
     def delete(self, medication_id: str, user_id: str) -> None :
         """Soft delete medication and its schedules"""
