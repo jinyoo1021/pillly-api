@@ -50,3 +50,11 @@ async def get_day_logs(
 ):
     """Get individual medication logs for a specific date"""
     return dose_service.get_day_logs(user.id, date)
+
+@router.delete("/undo")
+async def undo_dose(
+        schedule_id: str = Query(...),
+        user=Depends(get_current_user),
+):
+    """Delete today's dose log (undo confirm/skip)"""
+    return dose_service.undo(schedule_id, user.id)

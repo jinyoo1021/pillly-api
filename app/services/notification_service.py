@@ -4,6 +4,14 @@ from app.core.supabase import supabase
 from app.core.config import settings
 from app.core.security import verify_qstash_signature
 import httpx
+import firebase_admin
+from firebase_admin import credentials, messaging
+
+# Initialize Firebase Admin SDK
+if not firebase_admin._apps:
+    cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS_PATH)
+    firebase_admin.initialize_app(cred)
+
 
 class NotificationService:
 
@@ -140,10 +148,29 @@ class NotificationService:
 
 
     async def _send_fcm(self, token: str, schedule_id: str, medication_name: str) -> None:
-        """Send Android push via FCM"""
-        # Will be implemented when Firebase credentials are available
-        # for now,
-        print(f"FCM send to {token[:20]}... | {medication_name} (schedule {schedule_id})")
+        """Send data-only FCM message for action button support"""
+
+        message = messaging.Message(
+            data={
+                'schedule_id': schedule_id,
+                'log_date': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+                'medication_name': medication_name,
+                'title': '💊 Medication Reminder',
+                'body': f'Time to take {medication_name}',
+                'type': 'medication_reminder',
+            },
+            android=messaging.AndroidConfig(
+                priority='high',
+            ),
+            token=token,
+        )
+
+        try:
+            result = messaging.send(message)
+            print(f"=== FCM sent successfully: {result} ===")
+        except Exception as e:
+            print(f"=== FCM send FAILED: {e} ===")
+            raise
 
     async def _send_apns(self, token: str, schedule_id: str, medication_name: str) -> None:
         """Send iOS push via APNs"""

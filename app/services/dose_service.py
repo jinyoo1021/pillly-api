@@ -310,3 +310,31 @@ class DoseService:
         except Exception as e:
             print(f"ERROR in get_stats: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    def undo(self, schedule_id: str, user_id: str) -> dict:
+        """Delete today's dose log for a schedule (undo confirm/skip)"""
+        try:
+            today = date.today().isoformat()
+
+            # Find today's log for this schedule
+            existing = supabase.table("dose_logs") \
+                .select("id") \
+                .eq("schedule_id", schedule_id) \
+                .eq("user_id", user_id) \
+                .eq("log_date", today) \
+                .execute()
+
+            if not existing.data:
+                return {"deleted": False}
+
+            # Delete the log
+            supabase.table("dose_logs") \
+                .delete() \
+                .eq("id", existing.data[0]["id"]) \
+                .execute()
+
+            return {"deleted": True}
+
+        except Exception as e:
+            print(f"ERROR in undo: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
