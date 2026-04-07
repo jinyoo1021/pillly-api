@@ -42,3 +42,11 @@ async def get_dose_stats(
 ):
     """Get dose statistics by period"""
     return dose_service.get_stats(user.id, period)
+
+@router.get("/logs/day")
+async def get_day_logs(
+        date: str,
+        user=Depends(get_current_user),
+):
+    """Get individual medication logs for a specific date"""
+    return dose_service.get_day_logs(user.id, date)

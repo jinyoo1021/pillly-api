@@ -15,6 +15,12 @@ class ScheduleResponse(BaseModel):
     cycle_value: Optional[dict | list] = None
     is_active: bool
 
+class ScheduleUpdate(BaseModel):
+    scheduled_time: str
+    cycle_type: str
+    cycle_value: Optional[dict | list] = None
+
+
 # Medication schemas
 
 class MedicationCreate(BaseModel):
@@ -29,6 +35,7 @@ class MedicationUpdate(BaseModel):
     dosage: Optional[str] = None
     color_tag: Optional[str] = None
     memo: Optional[str] = None
+    schedules: Optional[list[ScheduleUpdate]] = None
 
 class MedicationResponse(BaseModel):
     id: str
