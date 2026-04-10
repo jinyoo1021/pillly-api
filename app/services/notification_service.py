@@ -1,9 +1,7 @@
-from fastapi import HTTPException, Request
-from datetime import datetime, timezone
+from fastapi import HTTPException
+from datetime import datetime, date, timezone
 from app.core.supabase import supabase
 from app.core.config import settings
-from app.core.security import verify_qstash_signature
-import httpx
 import firebase_admin
 from firebase_admin import credentials, messaging
 
@@ -16,9 +14,8 @@ if not firebase_admin._apps:
 class NotificationService:
 
     def register_token(self, user_id: str, token: str, platform: str) -> dict:
-        """Register or Update device FCM/APNs token"""
+        """Register or update device FCM/APNs token"""
         try:
-            # Upsert device token
             supabase.table("device_tokens").upsert({
                 "user_id": user_id,
                 "token": token,
@@ -37,7 +34,7 @@ class NotificationService:
         try:
             # Fetch schedule + medication info
             schedule = supabase.table("schedules") \
-                .select("id, scheduled_time, medication_id") \
+                .select("id, scheduled_time, cycle_type, cycle_value, medication_id") \
                 .eq("id", schedule_id) \
                 .single() \
                 .execute()
@@ -45,15 +42,33 @@ class NotificationService:
             if not schedule.data:
                 raise HTTPException(status_code=404, detail="SCHEDULE_NOT_FOUND")
 
+            # ── Interval-type guard ──────────────────────
+            # QStash fires daily for interval schedules,
+            # so we check here if today is actually a valid day.
+            cycle_type = schedule.data.get("cycle_type", "daily")
+            cycle_value = schedule.data.get("cycle_value")
+
+            if cycle_type == "interval" and isinstance(cycle_value, dict):
+                interval_days = cycle_value.get("days", 1)
+                start_date_str = cycle_value.get("start_date")
+                if start_date_str and interval_days > 1:
+                    start = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+                    if (date.today() - start).days % interval_days != 0:
+                        print(f"Interval skip: not a valid day for schedule {schedule_id}")
+                        return {"sent": False, "reason": "INTERVAL_NOT_TODAY"}
+
             # Fetch medication name
             medication = supabase.table("medications") \
-                .select("name") \
+                .select("name, is_active") \
                 .eq("id", schedule.data["medication_id"]) \
                 .single() \
                 .execute()
 
+            if not medication.data or not medication.data.get("is_active", True):
+                print(f"Medication inactive or not found for schedule {schedule_id}")
+                return {"sent": False, "reason": "MEDICATION_INACTIVE"}
 
-            medication_name = medication.data["name"] if medication.data else "Unknown"
+            medication_name = medication.data["name"]
 
             # Fetch device token
             token_row = supabase.table("device_tokens") \
@@ -116,7 +131,6 @@ class NotificationService:
 
             items = []
             for log in logs.data:
-                # Fetch medication name per log
                 schedule = supabase.table("schedules") \
                     .select("medication_id") \
                     .eq("id", log["schedule_id"]) \
@@ -146,10 +160,8 @@ class NotificationService:
             print(traceback.format_exc())
             raise HTTPException(status_code=500, detail=str(e))
 
-
     async def _send_fcm(self, token: str, schedule_id: str, medication_name: str) -> None:
         """Send data-only FCM message for action button support"""
-
         message = messaging.Message(
             data={
                 'schedule_id': schedule_id,
@@ -167,14 +179,11 @@ class NotificationService:
 
         try:
             result = messaging.send(message)
-            print(f"=== FCM sent successfully: {result} ===")
+            print(f"FCM sent successfully: {result}")
         except Exception as e:
-            print(f"=== FCM send FAILED: {e} ===")
+            print(f"FCM send FAILED: {e}")
             raise
 
     async def _send_apns(self, token: str, schedule_id: str, medication_name: str) -> None:
-        """Send iOS push via APNs"""
-        # Will be implemented when APNs credentials are available
-        # for now,
+        """Send iOS push via APNs (placeholder)"""
         print(f"APNs send to {token[:20]}... | {medication_name} (schedule {schedule_id})")
-

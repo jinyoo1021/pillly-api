@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     # QStash
     QSTASH_TOKEN: str = "local-dummy"
+    QSTASH_URL: str = "https://qstash.upstash.io"
     QSTASH_CURRENT_SIGNING_KEY: str = "local-dummy"
     QSTASH_NEXT_SIGNING_KEY: str = "local-dummy"
 

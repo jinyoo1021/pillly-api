@@ -1,12 +1,16 @@
 from fastapi import HTTPException
 from app.core.supabase import supabase
 from app.schemas.medication import MedicationCreate, MedicationUpdate
+from app.services.qstash_service import QStashService
 
 
 class MedicationService:
 
+    def __init__(self):
+        self._qstash = QStashService()
+
     def get_all(self, user_id: str) -> list:
-        """Get all active medication with scheludes for a user"""
+        """Get all active medication with schedules for a user"""
         response = supabase.table("medications") \
             .select("*, schedules(*)") \
             .eq("user_id", user_id) \
@@ -16,12 +20,12 @@ class MedicationService:
 
         return response.data
 
-    def create(self, user_id: str, req: MedicationCreate) -> dict:
-        """Create a new medication with schedules"""
+    async def create(self, user_id: str, req: MedicationCreate) -> dict:
+        """Create a new medication with schedules, then register QStash crons"""
         try:
-            print(f"Creating medication for user_id: {user_id}")\
+            print(f"Creating medication for user_id: {user_id}")
 
-            #Check if user exists in public.users
+            # Check if user exists in public.users
             user_check = supabase.table("users") \
                 .select("id") \
                 .eq("id", user_id) \
@@ -65,18 +69,22 @@ class MedicationService:
             ]
             supabase.table("schedules").insert(schedules).execute()
 
+            # Register QStash cron schedules for push notifications
+            await self._qstash.sync_schedules(medication_id, user_id)
+
             return {
                 "id": medication_id,
                 "name": req.name,
                 "created_at": med.data[0]["created_at"],
             }
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"ERROR in create medication: {e}") # print error for debugging
+            print(f"ERROR in create medication: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-
-    def update(self, medication_id: str, user_id: str, req: MedicationUpdate) -> dict:
-        """Update medication info and schedules"""
+    async def update(self, medication_id: str, user_id: str, req: MedicationUpdate) -> dict:
+        """Update medication info and schedules, then re-sync QStash crons"""
         self._verify_owner(medication_id, user_id)
 
         # Update medications table, excluding schedules field
@@ -91,7 +99,6 @@ class MedicationService:
                 .execute()
 
         # Soft delete existing schedules and insert new ones
-        # Hard delete is not possible due to FK constraint from dose_logs
         if req.schedules is not None:
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc).isoformat()
@@ -115,6 +122,9 @@ class MedicationService:
             ]
             supabase.table("schedules").insert(new_schedules).execute()
 
+        # Re-sync QStash schedules with updated times
+        await self._qstash.sync_schedules(medication_id, user_id)
+
         # Return updated medication with schedules
         result = supabase.table("medications") \
             .select("*, schedules!inner(*)") \
@@ -126,9 +136,12 @@ class MedicationService:
         data["schedules"] = [s for s in data.get("schedules", []) if s.get("is_active", True)]
         return data
 
-    def delete(self, medication_id: str, user_id: str) -> None :
-        """Soft delete medication and its schedules"""
+    async def delete(self, medication_id: str, user_id: str) -> None:
+        """Soft delete medication and remove QStash schedules"""
         self._verify_owner(medication_id, user_id)
+
+        # Remove QStash schedules first
+        await self._qstash.delete_all_for_medication(medication_id)
 
         from datetime import datetime, timezone
         supabase.table("medications") \
@@ -136,11 +149,10 @@ class MedicationService:
             .eq("id", medication_id) \
             .execute()
 
-    def toggle(self, medication_id: str, user_id: str) -> dict:
-        """Toggle medication active/incative"""
+    async def toggle(self, medication_id: str, user_id: str) -> dict:
+        """Toggle medication active/inactive and sync QStash accordingly"""
         self._verify_owner(medication_id, user_id)
 
-        # G
         current = supabase.table("medications") \
             .select("is_active") \
             .eq("id", medication_id) \
@@ -149,10 +161,16 @@ class MedicationService:
 
         new_state = not current.data["is_active"]
 
-        result = supabase.table("medications") \
+        supabase.table("medications") \
             .update({"is_active": new_state}) \
             .eq("id", medication_id) \
             .execute()
+
+        # Sync QStash: create schedules if activating, remove if deactivating
+        if new_state:
+            await self._qstash.sync_schedules(medication_id, user_id)
+        else:
+            await self._qstash.delete_all_for_medication(medication_id)
 
         return {"id": medication_id, "is_active": new_state}
 

@@ -1,15 +1,12 @@
 from fastapi import HTTPException, Header
 from app.core.supabase import supabase
-import hmac
-import hashlib
 from app.core.config import settings
+
 
 async def get_current_user(authorization: str = Header(...)):
     """
     Authorization: Bearer <supabase_access_token>
-        - Verify the token with Supabase
-        - Check if the user is active
-        - Return user info or raise HTTPException(401)
+    Verify token with Supabase and return user info.
     """
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="AUTH_REQUIRED")
@@ -23,28 +20,26 @@ async def get_current_user(authorization: str = Header(...)):
         raise HTTPException(status_code=401, detail="AUTH_REQUIRED")
 
 
-def verify_qstash_signature(
-        body: bytes,
-        signature: str,
-) -> bool:
-    """
-    Verify QStash signature using QStash Webhook HMAC
-    For blocking /notify direct calls from outside
-    """
-    for key in [
-        settings.QSTASH_CURRENT_SIGNING_KEY,
-        settings.QSTASH_NEXT_SIGNING_KEY,
-    ]:
-        if key == "local-dummy":
-            return True     # if Local, skip signature verification
+def verify_qstash_signature(body: bytes, signature: str) -> bool:
+    """Verify QStash webhook signature using JWT verification"""
 
-    expected = hmac.new(
-        key.encode(),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
-
-    if hmac.compare_digest(expected, signature):
+    # Skip verification in local development
+    if settings.QSTASH_CURRENT_SIGNING_KEY == "local-dummy":
         return True
 
-    return False
+    from qstash import Receiver
+
+    receiver = Receiver(
+        current_signing_key=settings.QSTASH_CURRENT_SIGNING_KEY,
+        next_signing_key=settings.QSTASH_NEXT_SIGNING_KEY,
+    )
+
+    try:
+        receiver.verify(
+            body=body.decode("utf-8"),
+            signature=signature,
+        )
+        return True
+    except Exception as e:
+        print(f"QStash signature verification failed: {e}")
+        return False
